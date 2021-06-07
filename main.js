@@ -22,9 +22,27 @@ const getNaverURL = (x, y) => {
   ).join("%3B")}`;
 };
 
-const INTERVAL = envConfig.INTERVAL || 5000;
+const INTERVAL_MS = envConfig.INTERVAL_MS || 3000;
 const NAVER_ID = envConfig.NAVER_ID;
 const NAVER_PW = envConfig.NAVER_PW;
+
+// prevent duplicate open
+let opened = [];
+
+function isOpened(checkingUrl) {
+  opened.find(
+    ([time, url]) => url === checkingUrl && +new Date() - time < 20000
+  );
+}
+
+function markOpened(url) {
+  opened.push([+new Date(), url]);
+}
+
+// assume opened window needs to be closed after 20s
+function cleanOpened() {
+  opened = opened.filter(([time, url]) => +new Date() - time < 20000);
+}
 
 (async () => {
   const browser = await chromium.launch({ headless: false });
@@ -41,7 +59,8 @@ const NAVER_PW = envConfig.NAVER_PW;
   await page.goto(getNaverURL(coordinates[0][0], coordinates[0][1]));
 
   setInterval(() => {
-    console.log(`LOG: running interval every ${INTERVAL}s`);
+    console.log(`LOG: running interval every ${INTERVAL_MS}ms`);
+    cleanOpened();
     coordinates
       .map((coordinate) => {
         return page.evaluate(async (arg) => {
@@ -50,11 +69,16 @@ const NAVER_PW = envConfig.NAVER_PW;
             const res = await getVaccineList(x, y).then((res) => res.json());
             const businesses = res[0].data.rests.businesses.items;
             const filteredBussinesses = businesses
-              .filter((b) => b.vaccineQuantity.quantityStatus !== "empty")
+              .filter((b) => {
+                return (
+                  b.vaccineQuantity != null &&
+                  b.vaccineQuantity.quantityStatus !== "empty"
+                );
+              })
               .sort(
                 (a, b) =>
-                  Number(b.vaccineQuantity.quantity) -
-                  Number(a.vaccineQuantity.quantity)
+                  Number(b.vaccineQuantity?.quantity ?? 0) -
+                  Number(a.vaccineQuantity.quantity ?? 0)
               );
             const businessHasVaccine = filteredBussinesses[0];
             return businessHasVaccine
@@ -72,8 +96,15 @@ const NAVER_PW = envConfig.NAVER_PW;
           const [x, y, label, business] = result;
           const url = `${getNaverURL(x, y)}`;
           try {
+            if (isOpened(url)) {
+              return;
+            }
+
             const vaccinePage = await context.newPage();
             await vaccinePage.goto(url);
+            markOpened(url);
+            opened.push(url);
+
             // click check button on the bottom-left
             const isAvailable = await vaccinePage.evaluate(() => {
               const checkButton = document.querySelector(
@@ -115,5 +146,5 @@ const NAVER_PW = envConfig.NAVER_PW;
           console.log(result);
         }
       });
-  }, INTERVAL * 1000);
+  }, INTERVAL_MS);
 })();
